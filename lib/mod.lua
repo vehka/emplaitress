@@ -376,15 +376,40 @@ mod.hook.register("script_post_cleanup", "emplaitress post cleanup", function()
     end
 end)
 
-mod.hook.register("system_post_startup", "emplaitress post startup", function()
-    local has_mi = os.execute('test -n "$(find /home/we/.local/share/SuperCollider/Extensions/ -name MiPlaits.sc)"')
-    if not has_mi then
-        print("emplaitress: installing mi-UGens")
-        os.execute("wget --quiet https://github.com/schollz/oomph/releases/download/prereqs/mi-UGens.762548fd3d1fcf30e61a3176c1b764ec1cc82020.tar.gz -P /tmp/")
-        os.execute("tar -xvzf /tmp/mi-UGens.762548fd3d1fcf30e61a3176c1b764ec1cc82020.tar.gz -C /home/we/.local/share/SuperCollider/Extensions/")
-        os.execute("rm /tmp/mi-UGens.762548fd3d1fcf30e61a3176c1b764ec1cc82020.tar.gz")
-        print("PLEASE RESTART")
-    else
-        print("emplaitress found mi ugens")
+-- The Mutable Instruments UGens come from a tarball. sclang only sees new
+-- classes and plugins when it starts, so a fresh install needs one more
+-- restart; the installer screen offers it.
+local MI_UGENS_URL = "https://github.com/schollz/oomph/releases/download/prereqs/"
+    .. "mi-UGens.762548fd3d1fcf30e61a3176c1b764ec1cc82020.tar.gz"
+
+local deps = dofile(_path.code .. mod.this_name .. "/lib/deps.lua")
+local mod_deps = deps.new { name = "emplaitress", dir = _path.data .. "emplaitress/deps" }
+mod_deps:add {
+    id = "mi-ugens",
+    label = "Mutable UGens",
+    why = "Plaits synth engines",
+    size = "3 MB",
+    check_ugens = { "MiPlaits.sc" },
+    restart = true,
+    manual = "Build mi-UGens (github.com/v7b1/mi-UGens) into "
+        .. "~/.local/share/SuperCollider/Extensions",
+    install = {
+        -- the prebuilt binaries are 32-bit ARM, i.e. norns and shields
+        { when = { arch = "armv7l" }, steps = { {
+            url = MI_UGENS_URL,
+            sha256 = "9412622a99d703a4c5803c1568ca174d2607d60390c9313ad2762445051708ce",
+            extract = "~/.local/share/SuperCollider/Extensions",
+        } } },
+    },
+}
+
+-- Once per boot, after the first script has started (loading a script resets
+-- the key/enc/redraw handlers, so the screen can't be taken earlier).
+local deps_checked = false
+mod.hook.register("script_post_init", "emplaitress deps", function()
+    if deps_checked then return end
+    deps_checked = true
+    if #mod_deps:missing() > 0 or mod_deps:restart_pending() then
+        mod_deps:ensure({ "mi-ugens" })
     end
 end)

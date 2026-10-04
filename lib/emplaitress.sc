@@ -4,6 +4,13 @@ Emplaitress {
     *initClass {
         notes = 6.collect { Dictionary.new};
 		inverse = 6.collect {IdentityDictionary.new};
+        // Without the Mutable Instruments UGens the SynthDefs below throw, and an
+        // error in initClass stops sclang's startup (norns then reports
+        // SUPERCOLLIDER FAIL). Stay quiet until the UGens are installed.
+        if('MiPlaits'.asClass.isNil) {
+            "emplaitress: MiPlaits UGen not installed, voices disabled".warn;
+            ^this
+        };
         
         StartUp.add {
 			(Routine.new {
