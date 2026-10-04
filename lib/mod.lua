@@ -368,6 +368,7 @@ end
 mod.hook.register("script_pre_init", "emplaitress pre init", pre_init)
 
 mod.hook.register("script_post_cleanup", "emplaitress post cleanup", function()
+    if not note_players then return end -- no script has run yet
     for v = 1,4 do
         local p = note_players["emplait " .. v]
         if p then
@@ -403,13 +404,25 @@ mod_deps:add {
     },
 }
 
--- Once per boot, after the first script has started (loading a script resets
--- the key/enc/redraw handlers, so the screen can't be taken earlier).
+-- Once per boot: offer the install, or the restart if one is still pending.
 local deps_checked = false
-mod.hook.register("script_post_init", "emplaitress deps", function()
+local function offer_deps()
     if deps_checked then return end
     deps_checked = true
     if #mod_deps:missing() > 0 or mod_deps:restart_pending() then
         mod_deps:ensure({ "mi-ugens" })
     end
-end)
+end
+
+-- Normally after the first script has started (loading a script resets the
+-- key/enc/redraw handlers, so the screen can't be taken earlier).
+mod.hook.register("script_post_init", "emplaitress deps", offer_deps)
+
+-- Other classes that need the same UGens (fx_grains uses MiClouds) can make
+-- sclang fail to start. Then no script ever loads and norns calls
+-- startup_status.timeout instead; this is the only place to show the installer.
+local startup_timeout = _norns.startup_status.timeout
+_norns.startup_status.timeout = function(...)
+    startup_timeout(...)
+    offer_deps()
+end
