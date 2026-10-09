@@ -383,8 +383,97 @@ end)
 local MI_UGENS_URL = "https://github.com/schollz/oomph/releases/download/prereqs/"
     .. "mi-UGens.762548fd3d1fcf30e61a3176c1b764ec1cc82020.tar.gz"
 
+-- Everywhere else the plugin is built on the machine, against the installed
+-- SuperCollider headers. Pinned, so everyone builds the same source.
+local MI_UGENS_REPO = "https://github.com/v7b1/mi-UGens"
+local MI_UGENS_REV = "10f6824f68ad63475f67dfe3fe5016e2d2634f84"
+
+local function sc_include_dirs()
+    local dirs = {}
+    local prefix = os.getenv("PREFIX") -- termux
+    if prefix and prefix ~= "" then
+        dirs[#dirs + 1] = prefix .. "/include/SuperCollider"
+    end
+    dirs[#dirs + 1] = "/usr/local/include/SuperCollider"
+    dirs[#dirs + 1] = "/usr/include/SuperCollider"
+    return dirs
+end
+
+local function have_sc_headers()
+    for _, dir in ipairs(sc_include_dirs()) do
+        local f = io.open(dir .. "/plugin_interface/SC_PlugIn.h", "r")
+        if f then
+            f:close()
+            return true
+        end
+    end
+    return false
+end
+
+-- Only MiPlaits is built. The work folder is outside dust, where sclang would
+-- compile the class files of the checkout as well. mi-UGens wants a
+-- SuperCollider source tree; the installed headers under an `include` link
+-- look the same to it.
+local BUILD_MI_PLAITS = [[
+set -e
+work="$HOME/.cache/emplaitress"
+src="$work/mi-UGens"
+ext="$HOME/.local/share/SuperCollider/Extensions/mi-UGens"
+inc=
+for d in ]] .. table.concat(sc_include_dirs(), " ") .. [[; do
+    if [ -f "$d/plugin_interface/SC_PlugIn.h" ]; then inc=$d; break; fi
+done
+if [ -z "$inc" ]; then echo "SuperCollider headers not found"; exit 1; fi
+rm -rf "$work"
+mkdir -p "$src" "$work/sc" "$work/wrap"
+echo "fetching mi-UGens"
+git init -q "$src"
+git -C "$src" fetch -q --depth 1 ]] .. MI_UGENS_REPO .. " " .. MI_UGENS_REV .. [[
+
+git -C "$src" checkout -q FETCH_HEAD
+ln -s "$inc" "$work/sc/include"
+{
+    echo "cmake_minimum_required(VERSION 3.10)"
+    echo "project(emplaitress_ugens CXX)"
+    echo "set(CMAKE_CXX_STANDARD 17)"
+    echo "set(CMAKE_CXX_STANDARD_REQUIRED ON)"
+    echo "add_subdirectory($src/projects/MiPlaits MiPlaits)"
+} > "$work/wrap/CMakeLists.txt"
+cmake -S "$work/wrap" -B "$work/build" -DSC_PATH="$work/sc" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$work/build" -j "$(nproc 2>/dev/null || echo 2)"
+mkdir -p "$ext/Classes"
+cp "$work/build/MiPlaits/MiPlaits.so" "$ext/"
+cp "$src/sc/Classes/MiPlaits.sc" "$ext/Classes/"
+rm -rf "$work"
+echo "installed in $ext"
+]]
+
 local deps = dofile(_path.code .. mod.this_name .. "/lib/deps.lua")
 local mod_deps = deps.new { name = "emplaitress", dir = _path.data .. "emplaitress/deps" }
+mod_deps:add {
+    id = "build-tools",
+    label = "build tools",
+    why = "to build the Mutable UGens",
+    check = { "git", "cmake", "make", "c++" },
+    pkg = {
+        apt = "git cmake make g++",
+        pacman = "git cmake make gcc",
+        dnf = "git cmake make gcc-c++",
+        termux = "git cmake make clang",
+    },
+}
+mod_deps:add {
+    id = "sc-headers",
+    label = "SuperCollider headers",
+    why = "to build the Mutable UGens",
+    check_fn = have_sc_headers,
+    pkg = {
+        apt = "supercollider-dev",
+        pacman = "supercollider",
+        dnf = "supercollider-devel",
+        termux = "supercollider",
+    },
+}
 mod_deps:add {
     id = "mi-ugens",
     label = "Mutable UGens",
@@ -401,6 +490,10 @@ mod_deps:add {
             sha256 = "9412622a99d703a4c5803c1568ca174d2607d60390c9313ad2762445051708ce",
             extract = "~/.local/share/SuperCollider/Extensions",
         } } },
+        { needs = { "build-tools", "sc-headers" }, steps = { {
+            cmd = BUILD_MI_PLAITS,
+            step_label = "build MiPlaits (a few minutes)",
+        } } },
     },
 }
 
@@ -409,7 +502,7 @@ local deps_checked = false
 local function offer_deps()
     if deps_checked then return end
     deps_checked = true
-    if #mod_deps:missing() > 0 or mod_deps:restart_pending() then
+    if #mod_deps:missing({ "mi-ugens" }) > 0 or mod_deps:restart_pending() then
         mod_deps:ensure({ "mi-ugens" })
     end
 end
